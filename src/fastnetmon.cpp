@@ -1299,7 +1299,7 @@ bool load_configuration_file() {
     for (host_group_map_t::iterator hostgroup_itr = host_groups.begin(); hostgroup_itr != host_groups.end(); ++hostgroup_itr) {
         std::string host_group_name = hostgroup_itr->first;
 
-        logger << log4cpp::Priority::INFO << "We will read ban settings for " << host_group_name;
+        logger << log4cpp::Priority::INFO << "We We We will read ban settings for " << host_group_name;
 
         host_group_ban_settings_map[ host_group_name ] =  read_ban_settings(configuration_map, host_group_name);
 

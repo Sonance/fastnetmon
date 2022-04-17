@@ -982,45 +982,6 @@ sub install_hiredis {
     put_library_path_to_ld_so("/etc/ld.so.conf.d/hiredis.conf", "$hiredis_install_path/lib"); 
 }
 
-# We use global variable $ndpi_repository here
-sub install_ndpi {
-    if ($distro_type eq 'debian' or $distro_type eq 'ubuntu') {
-        apt_get('git', 'autoconf', 'libtool', 'automake', 'libpcap-dev');
-    } elsif ($distro_type eq 'centos') {
-        # We have json-c-devel for CentOS 6 and 7 and will use it for nDPI build system
-        yum('git', 'autoconf', 'automake', 'libtool', 'libpcap-devel', 'json-c-devel', 'which');
-    } elsif ($os_type eq 'freebsd') {
-        exec_command("pkg install -y git autoconf automake libtool");
-    } 
-
-    print "Download nDPI\n";
-    if (-e "$temp_folder_for_building_project/nDPI") {
-        # Get new code from the repository
-        chdir "$temp_folder_for_building_project/nDPI";
-        exec_command("git pull");
-    } else {
-        chdir $temp_folder_for_building_project;
-        exec_command("git clone $ndpi_repository");
-        chdir "$temp_folder_for_building_project/nDPI";
-    }   
-
-    print "Configure nDPI\n";
-    exec_command("./autogen.sh");
-
-    # We have specified direct path to json-c here because it required for example app compilation
-    exec_command("PKG_CONFIG_PATH=/opt/json-c-0.12/lib/pkgconfig ./configure --prefix=/opt/ndpi");
-
-   if ($? != 0) {
-        print "Configure failed\n";
-        return;
-    }
-
-    print "Build and install nDPI\n";
-    exec_command("make $make_options install");
-
-    print "Add ndpi to ld.so.conf\n";
-    put_library_path_to_ld_so("/etc/ld.so.conf.d/ndpi.conf", "/opt/ndpi/lib"); 
-}
 
 sub init_package_manager { 
 
