@@ -2,20 +2,28 @@
 #include "../fastnetmon_actions.h"
 #include "../fastnetmon_types.h"
 
-#include <dlfcn.h>
+#ifdef __GNUC__
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
+#endif // __GNUC__
 
-extern "C" {
-    // Gobgp library
-    #include "libgobgp.h"
-}
-
-#include <grpc/grpc.h>
 #include <grpc++/channel.h>
 #include <grpc++/client_context.h>
 #include <grpc++/create_channel.h>
 #include <grpc++/security/credentials.h>
+#include <grpc/grpc.h>
 
-#include "gobgp_api_client.grpc.pb.h"
+#include "attribute.pb.h"
+#include "gobgp.grpc.pb.h"
+
+#include "../bgp_protocol.hpp"
+
+#ifdef __GNUC__
+#pragma GCC diagnostic pop
+#endif // __GNUC__
+
+
+unsigned int gobgp_client_connection_timeout = 5;
 
 using grpc::Channel;
 using grpc::ClientContext;
@@ -23,255 +31,159 @@ using grpc::Status;
 
 using gobgpapi::GobgpApi;
 
-// Create function pointers
-typedef path* (*serialize_path_dynamic_t)(int p0, char* p1);
-typedef char* (*decode_path_dynamic_t)(path* p0);
-
-serialize_path_dynamic_t serialize_path_dynamic = NULL;
-decode_path_dynamic_t decode_path_dynamic = NULL;
-
 class GrpcClient {
     public:
-        GrpcClient(std::shared_ptr<Channel> channel) : stub_(GobgpApi::NewStub(channel)) {}
-        void GetAllActiveAnnounces(unsigned int route_family) {
-            ClientContext context;
-            gobgpapi::Table table;
-
-            table.set_family(route_family);
-            // We could specify certain neighbor here
-            table.set_name("");
-            table.set_type(gobgpapi::Resource::GLOBAL);
-
-            gobgpapi::Table response_table;
-
-            auto status = stub_->GetRib(&context, table, &response_table);
-
-            if (!status.ok()) {
-                // error_message
-                logger << log4cpp::Priority::INFO << "Problem with RPC: " << status.error_code() << " message " << status.error_message();
-                //std::cout << "Problem with RPC: " << status.error_code() << " message " << status.error_message() << std::endl;
-                return;
-            } else {
-                // std::cout << "RPC working well" << std::endl;
-            } 
-
-            std::cout << "List of announced prefixes for route family: " << route_family << std::endl << std::endl;
-
-            for (auto current_destination : response_table.destinations()) {
-                logger << log4cpp::Priority::INFO << "Prefix: " << current_destination.prefix();
-                //std::cout << "Prefix: " << current_destination.prefix() << std::endl;
-
-                //std::cout << "Paths size: " << current_destination.paths_size() << std::endl;
-
-                gobgpapi::Path my_path = current_destination.paths(0);
-
-                // std::cout << "Pattrs size: " << my_path.pattrs_size() << std::endl;
-
-                buf my_nlri;
-                my_nlri.value = (char*)my_path.nlri().c_str();
-                my_nlri.len = my_path.nlri().size();
-
-                path_t gobgp_lib_path;
-                gobgp_lib_path.nlri = my_nlri;
-                // Not used in library code!
-                gobgp_lib_path.path_attributes_cap = 0;
-                gobgp_lib_path.path_attributes_len = my_path.pattrs_size();
-
-                buf* my_path_attributes[ my_path.pattrs_size() ];
-                for (int i = 0; i < my_path.pattrs_size(); i++) {
-                    my_path_attributes[i] = (buf*)malloc(sizeof(buf));
-                    my_path_attributes[i]->len = my_path.pattrs(i).size();
-                    my_path_attributes[i]->value = (char*)my_path.pattrs(i).c_str();
-                }
-            
-                gobgp_lib_path.path_attributes = my_path_attributes;
-
-                logger << log4cpp::Priority::INFO << "NLRI: " << decode_path_dynamic(&gobgp_lib_path);
-                //std::cout << "NLRI: " << decode_path(&gobgp_lib_path) << std::endl; 
-            }
-        }
-        
-        void AnnounceFlowSpecPrefix(bool withdraw) {
-            const gobgpapi::ModPathArguments current_mod_path_arguments;
-
-            unsigned int AFI_IP = 1;
-            unsigned int SAFI_FLOW_SPEC_UNICAST = 133;
-            unsigned int ipv4_flow_spec_route_family = AFI_IP<<16 | SAFI_FLOW_SPEC_UNICAST;   
-
-            gobgpapi::Path* current_path = new gobgpapi::Path;
-            current_path->set_is_withdraw(withdraw);
-
-            /*
-            buf:
-                char *value;
-                int len;
-
-            path:
-                buf   nlri;
-                buf** path_attributes;
-                int   path_attributes_len;
-                int   path_attributes_cap;
-            */
-
-            path* path_c_struct = serialize_path_dynamic(ipv4_flow_spec_route_family, (char*)"match destination 10.0.0.0/24 protocol tcp source 20.0.0.0/24 then redirect 10:10");
-
-            // printf("Decoded NLRI output: %s, length %d raw string length: %d\n", decode_path(path_c_struct), path_c_struct->nlri.len, strlen(path_c_struct->nlri.value));
-
-            for (int path_attribute_number = 0; path_attribute_number < path_c_struct->path_attributes_len; path_attribute_number++) {
-                current_path->add_pattrs(path_c_struct->path_attributes[path_attribute_number]->value, 
-                    path_c_struct->path_attributes[path_attribute_number]->len);
-            }
-
-            current_path->set_nlri(path_c_struct->nlri.value, path_c_struct->nlri.len);
-
-            gobgpapi::ModPathsArguments request;
-            request.set_resource(gobgpapi::Resource::GLOBAL);
-
-            google::protobuf::RepeatedPtrField< ::gobgpapi::Path >* current_path_list = request.mutable_paths();
-            current_path_list->AddAllocated(current_path);
-            request.set_name("");
-
-            ClientContext context;
-
-            gobgpapi::Error return_error;
-
-            // result is a std::unique_ptr<grpc::ClientWriter<gobgpapi::ModPathArguments> >
-            auto send_stream = stub_->ModPaths(&context, &return_error);
-
-            bool write_result = send_stream->Write(request);
-
-            if (!write_result) {
-                logger << log4cpp::Priority::INFO << "Write to API failed\n";
-                //std::cout << "Write to API failed\n";
-            }
-
-            // Finish all writes
-            send_stream->WritesDone();
-
-            auto status = send_stream->Finish();
-    
-            if (status.ok()) {
-                //std::cout << "modpath executed correctly" << std::cout; 
-            } else {
-                logger << log4cpp::Priority::INFO << "modpath failed with code: " << status.error_code()
-                    << " message " << status.error_message();
-                //std::cout << "modpath failed with code: " << status.error_code()
-                //    << " message " << status.error_message() << std::endl;
-            }
-        }
-
-        void AnnounceUnicastPrefix(std::string announced_prefix, std::string announced_prefix_nexthop, bool is_withdrawal) {
-            const gobgpapi::ModPathArguments current_mod_path_arguments;
-
-            unsigned int AFI_IP = 1;
-            unsigned int SAFI_UNICAST = 1;
-            unsigned int ipv4_unicast_route_family = AFI_IP<<16 | SAFI_UNICAST;
-
-            gobgpapi::Path* current_path = new gobgpapi::Path;
-//            current_path->set_is_withdraw(withdraw);
-            if (is_withdrawal) {
-                current_path->set_is_withdraw(true);
-            }
-
-            /*
-            buf:
-                char *value;
-                int len;
-
-            path:
-                buf   nlri;
-                buf** path_attributes;
-                int   path_attributes_len;
-                int   path_attributes_cap;
-            */
-
-            std::string announce_line = announced_prefix + " nexthop " + announced_prefix_nexthop;
-
-            // 10.10.20.33/22 nexthop 10.10.1.99/32 
-            path* path_c_struct = serialize_path_dynamic(ipv4_unicast_route_family, (char*)announce_line.c_str());
-
-            if (path_c_struct == NULL) {
-                logger << log4cpp::Priority::ERROR << "Could not generate path\n";
-                return;
-            }
-
-            // printf("Decoded NLRI output: %s, length %d raw string length: %d\n", decode_path(path_c_struct), path_c_struct->nlri.len, strlen(path_c_struct->nlri.value));
-
-            for (int path_attribute_number = 0; path_attribute_number < path_c_struct->path_attributes_len; path_attribute_number++) {
-                current_path->add_pattrs(path_c_struct->path_attributes[path_attribute_number]->value, 
-                    path_c_struct->path_attributes[path_attribute_number]->len);
-            }
-
-            current_path->set_nlri(path_c_struct->nlri.value, path_c_struct->nlri.len);
-
-            gobgpapi::ModPathsArguments request;
-            request.set_resource(gobgpapi::Resource::GLOBAL);
-            google::protobuf::RepeatedPtrField< ::gobgpapi::Path >* current_path_list = request.mutable_paths(); 
-            current_path_list->AddAllocated(current_path);
-            request.set_name("");
-
-            ClientContext context;
-
-            gobgpapi::Error return_error;
-
-            // result is a std::unique_ptr<grpc::ClientWriter<api::ModPathArguments> >
-            auto send_stream = stub_->ModPaths(&context, &return_error);
-
-            bool write_result = send_stream->Write(request);
-
-            if (!write_result) {
-                //std::cout << "Write to API failed\n";
-                logger << log4cpp::Priority::ERROR << "Write to API failed\n";
-                return;
-            }
-
-            // Finish all writes
-            send_stream->WritesDone();
-
-            auto status = send_stream->Finish();
-    
-            if (status.ok()) {
-                //std::cout << "modpath executed correctly" << std::cout; 
-            } else {
-                //std::cout << "modpath failed with code: " << status.error_code()
-                //    << " message " << status.error_message() << std::endl;
-                logger << log4cpp::Priority::ERROR << "modpath failed with code: " << status.error_code()
-                    << " message " << status.error_message();
-
-                return;
-            }
-        }
-
-        std::string GetNeighbor(std::string neighbor_ip) {
-            gobgpapi::Arguments request;
-            request.set_family(4);
-            request.set_name(neighbor_ip);
-
-            ClientContext context;
-
-            gobgpapi::Peer peer;
-            grpc::Status status = stub_->GetNeighbor(&context, request, &peer);
-
-            if (status.ok()) {
-                gobgpapi::PeerConf peer_conf = peer.conf();
-                gobgpapi::PeerState peer_info = peer.info();
-
-                std::stringstream buffer;
-  
-                buffer
-                    << "Peer AS: " << peer_conf.peer_as() << "\n"
-                    << "Peer router id: " << peer_conf.id() << "\n"
-                    << "Peer flops: " << peer_info.flops() << "\n"
-                    << "BGP state: " << peer_info.bgp_state();
-
-                return buffer.str();
-            } else {
-                return "Something wrong"; 
-            }
+    GrpcClient(std::shared_ptr<Channel> channel) : stub_(GobgpApi::NewStub(channel)) {
     }
 
+    bool AnnounceUnicastPrefixIPv4(std::string announced_address,
+                               std::string announced_prefix_nexthop,
+                               bool is_withdrawal,
+                               unsigned int cidr_mask,
+                               uint32_t community_as_32bit_int) {
+        grpc::ClientContext context;
+
+        // Set timeout for API
+        std::chrono::system_clock::time_point deadline =
+        std::chrono::system_clock::now() + std::chrono::seconds(gobgp_client_connection_timeout);
+        context.set_deadline(deadline);
+
+        auto gobgp_ipv4_unicast_route_family = new gobgpapi::Family;
+        gobgp_ipv4_unicast_route_family->set_afi(gobgpapi::Family::AFI_IP);
+        gobgp_ipv4_unicast_route_family->set_safi(gobgpapi::Family::SAFI_UNICAST);
+
+        gobgpapi::AddPathRequest request;
+        request.set_table_type(gobgpapi::TableType::GLOBAL);
+
+        gobgpapi::Path* current_path = new gobgpapi::Path;
+
+        current_path->set_allocated_family(gobgp_ipv4_unicast_route_family);
+
+        if (is_withdrawal) {
+            current_path->set_is_withdraw(true);
+        }
+
+        // Configure required announce
+        google::protobuf::Any* current_nlri = new google::protobuf::Any;
+        gobgpapi::IPAddressPrefix current_ipaddrprefix;
+        current_ipaddrprefix.set_prefix(announced_address);
+        current_ipaddrprefix.set_prefix_len(cidr_mask);
+
+        current_nlri->PackFrom(current_ipaddrprefix);
+        current_path->set_allocated_nlri(current_nlri);
+
+        // Updating OriginAttribute info for current_path
+        google::protobuf::Any* current_origin = current_path->add_pattrs();
+        gobgpapi::OriginAttribute current_origin_t;
+        current_origin_t.set_origin(0);
+        current_origin->PackFrom(current_origin_t);
+
+        // Updating NextHopAttribute info for current_path
+        google::protobuf::Any* current_next_hop = current_path->add_pattrs();
+        gobgpapi::NextHopAttribute current_next_hop_t;
+        current_next_hop_t.set_next_hop(announced_prefix_nexthop);
+        current_next_hop->PackFrom(current_next_hop_t);
+
+        // Updating CommunitiesAttribute for current_path
+        google::protobuf::Any *current_communities = current_path->add_pattrs();
+        gobgpapi::CommunitiesAttribute current_communities_t;
+        current_communities_t.add_communities(community_as_32bit_int);
+        current_communities->PackFrom(current_communities_t);
+
+        request.set_allocated_path(current_path);
+
+        gobgpapi::AddPathResponse response;
+
+        // Don't be confused by name, it also can withdraw announces
+        auto status = stub_->AddPath(&context, request, &response);
+
+        if (!status.ok()) {
+            logger << log4cpp::Priority::ERROR
+                   << "AddPath request to BGP daemon failed with code: " << status.error_code()
+                   << " message " << status.error_message();
+
+            return false;
+        }
+
+
+        return true;
+    }
+
+ bool AnnounceUnicastPrefixIPv6(const subnet_ipv6_cidr_mask_t& client_ipv6,
+							   const subnet_ipv6_cidr_mask_t& ipv6_next_hop,
+                               bool is_withdrawal,
+                               uint32_t community_as_32bit_int) {
+        grpc::ClientContext context;
+
+        // Set timeout for API
+        std::chrono::system_clock::time_point deadline =
+        std::chrono::system_clock::now() + std::chrono::seconds(gobgp_client_connection_timeout);
+        context.set_deadline(deadline);
+
+        auto gobgp_ipv6_unicast_route_family = new gobgpapi::Family;
+        gobgp_ipv6_unicast_route_family->set_afi(gobgpapi::Family::AFI_IP6);
+        gobgp_ipv6_unicast_route_family->set_safi(gobgpapi::Family::SAFI_UNICAST);
+
+        gobgpapi::AddPathRequest request;
+        request.set_table_type(gobgpapi::TableType::GLOBAL);
+
+        gobgpapi::Path* current_path = new gobgpapi::Path;
+
+        current_path->set_allocated_family(gobgp_ipv6_unicast_route_family);
+
+        if (is_withdrawal) {
+            current_path->set_is_withdraw(true);
+        }
+
+        // Configure required announce
+        google::protobuf::Any* current_nlri = new google::protobuf::Any;
+        gobgpapi::IPAddressPrefix current_ipaddrprefix;
+        current_ipaddrprefix.set_prefix(print_ipv6_address(client_ipv6.subnet_address));
+        current_ipaddrprefix.set_prefix_len(client_ipv6.cidr_prefix_length);
+
+        current_nlri->PackFrom(current_ipaddrprefix);
+        current_path->set_allocated_nlri(current_nlri);
+
+        // Updating OriginAttribute info for current_path
+        google::protobuf::Any* current_origin = current_path->add_pattrs();
+        gobgpapi::OriginAttribute current_origin_t;
+        current_origin_t.set_origin(0);
+        current_origin->PackFrom(current_origin_t);
+
+        // Updating NextHopAttribute info for current_path
+        google::protobuf::Any* current_next_hop = current_path->add_pattrs();
+        gobgpapi::NextHopAttribute current_next_hop_t;
+         current_next_hop_t.set_next_hop(print_ipv6_address(ipv6_next_hop.subnet_address));
+        current_next_hop->PackFrom(current_next_hop_t);
+
+        // Updating CommunitiesAttribute for current_path
+        google::protobuf::Any *current_communities = current_path->add_pattrs();
+        gobgpapi::CommunitiesAttribute current_communities_t;
+        current_communities_t.add_communities(community_as_32bit_int);
+        current_communities->PackFrom(current_communities_t);
+
+        request.set_allocated_path(current_path);
+
+        gobgpapi::AddPathResponse response;
+
+        // Don't be confused by name, it also can withdraw announces
+        auto status = stub_->AddPath(&context, request, &response);
+
+        if (!status.ok()) {
+            logger << log4cpp::Priority::ERROR
+                   << "AddPath request to BGP daemon failed with code: " << status.error_code()
+                   << " message " << status.error_message();
+
+            return false;
+        }
+
+
+        return true;
+    }
+
+
     private:
-        std::unique_ptr<GobgpApi::Stub> stub_;
+    std::unique_ptr<GobgpApi::Stub> stub_;
 };
 
 GrpcClient* gobgp_client = NULL;
@@ -279,14 +191,41 @@ std::string gobgp_nexthop = "0.0.0.0";
 bool gobgp_announce_whole_subnet = false;
 bool gobgp_announce_host = false;
 
+bgp_community_attribute_element_t bgp_community_host;
+bgp_community_attribute_element_t bgp_community_subnet;
+
+// IPv6
+bool gobgp_announce_whole_subnet_ipv6 = false;
+bool gobgp_announce_host_ipv6 = false;
+
+bgp_community_attribute_element_t bgp_community_host_ipv6;
+bgp_community_attribute_element_t bgp_community_subnet_ipv6;;
+
+subnet_ipv6_cidr_mask_t ipv6_next_hop;
+
 void gobgp_action_init() {
-    logger << log4cpp::Priority::INFO << "GoBGP action module loaded"; 
-    gobgp_client = new GrpcClient(grpc::CreateChannel("localhost:50051", grpc::InsecureCredentials()));
-//    GrpcClient gobgp_client(grpc::CreateChannel("localhost:50051", grpc::InsecureCredentials()));
+    logger << log4cpp::Priority::INFO << "GoBGP action module loaded";
+    gobgp_client =
+    new GrpcClient(grpc::CreateChannel("localhost:50051", grpc::InsecureChannelCredentials()));
 
     if (configuration_map.count("gobgp_next_hop")) {
         gobgp_nexthop = configuration_map["gobgp_next_hop"];
     }
+
+    // Set IPv6 hop to safe default
+    ipv6_next_hop.cidr_prefix_length = 128;
+    read_ipv6_host_from_string("100::1", ipv6_next_hop.subnet_address);
+
+    if (configuration_map.count("gobgp_next_hop_ipv6")) {
+        bool parsed_next_hop_result =
+            read_ipv6_host_from_string(configuration_map["gobgp_next_hop_ipv6"], ipv6_next_hop.subnet_address);
+
+        if (!parsed_next_hop_result) {
+            logger << log4cpp::Priority::ERROR << "Can't parse specified IPv6 next hop to IPv6 address: " << configuration_map["gobgp_next_hop_ipv6"];
+        }
+    }
+
+    logger << log4cpp::Priority::INFO << "IPv6 next hop: " << print_ipv6_cidr_subnet(ipv6_next_hop);
 
     if (configuration_map.count("gobgp_announce_host")) {
         gobgp_announce_host = configuration_map["gobgp_announce_host"] == "on";
@@ -296,61 +235,116 @@ void gobgp_action_init() {
         gobgp_announce_whole_subnet = configuration_map["gobgp_announce_whole_subnet"] == "on";
     }
 
-    // According to this bug report: https://github.com/golang/go/issues/12873 
-    // We have significant issues with popen, daemonization and Go's runtime
+    if (configuration_map.count("gobgp_announce_host_ipv6")) {
+        gobgp_announce_host_ipv6 = configuration_map["gobgp_announce_host_ipv6"] == "on";
+    }   
 
-    // We use non absoulte path here and linker will find it fir us
-    void* gobgdp_library_handle = dlopen("libgobgp.so", RTLD_NOW);
+    if (configuration_map.count("gobgp_announce_whole_subnet_ipv6")) {
+        gobgp_announce_whole_subnet_ipv6 = configuration_map["gobgp_announce_whole_subnet_ipv6"] == "on";
+    }   
 
-    if (gobgdp_library_handle == NULL) {
-        logger << log4cpp::Priority::ERROR << "Could not load gobgp binary library: " << dlerror();
-        exit(1);
-    } 
 
-    dlerror();    /* Clear any existing error */
+    // Set them to safe defaults
+    bgp_community_host.asn_number = 65001;
+    bgp_community_host.community_number = 666;
 
-    /* According to the ISO C standard, casting between function
-        pointers and 'void *', as done above, produces undefined results.
-        POSIX.1-2003 and POSIX.1-2008 accepted this state of affairs and
-        proposed the following workaround:
-    */
-
-    serialize_path_dynamic = (serialize_path_dynamic_t)dlsym(gobgdp_library_handle, "serialize_path");
-    if (serialize_path_dynamic == NULL) {
-        logger << log4cpp::Priority::ERROR << "Could not load function serialize_path from the dynamic library";
-        exit(1);
+    if (configuration_map.count("gobgp_community_host")) {
+        if (!read_bgp_community_from_string(configuration_map["gobgp_community_host"], bgp_community_host)) {
+            logger << log4cpp::Priority::ERROR << "Cannot parse GoBGP community for host " << configuration_map["gobgp_community_host"];
+        }
     }
 
-    decode_path_dynamic = (decode_path_dynamic_t)dlsym(gobgdp_library_handle, "decode_path");
+    logger << log4cpp::Priority::INFO << "GoBGP host IPv4 community: " << bgp_community_host.asn_number << ":" << bgp_community_host.community_number;
 
-    if (decode_path_dynamic == NULL) {
-        logger << log4cpp::Priority::ERROR << "Could not load function decode_path from the dynamic library";
-        exit(1);
+    // Set them to safe defaults
+    bgp_community_subnet.asn_number = 65001;
+    bgp_community_subnet.community_number = 666;
+
+    if (configuration_map.count("gobgp_community_subnet")) {
+        if (!read_bgp_community_from_string(configuration_map["gobgp_community_subnet"], bgp_community_subnet)) {
+            logger << log4cpp::Priority::ERROR << "Cannot parse GoBGP community for subnet " << configuration_map["gobgp_community_subnet"];
+        }
     }
+
+    logger << log4cpp::Priority::INFO << "GoBGP subnet IPv4 community: " << bgp_community_subnet.asn_number << ":" << bgp_community_subnet.community_number;
+
+    // IPv6 communities
+    bgp_community_host_ipv6.asn_number = 65001;
+    bgp_community_host_ipv6.community_number = 666;
+
+    if (configuration_map.count("gobgp_community_host_ipv6")) {
+        if (!read_bgp_community_from_string(configuration_map["gobgp_community_host_ipv6"], bgp_community_host_ipv6)) {
+            logger << log4cpp::Priority::ERROR << "Cannot parse GoBGP community for IPv6 host " << configuration_map["gobgp_community_host_ipv6"];
+        }
+    }   
+
+    logger << log4cpp::Priority::INFO << "GoBGP host IPv6 community: " << bgp_community_host_ipv6.asn_number << ":" << bgp_community_host_ipv6.community_number;
+
+    // Set them to safe defaults
+    bgp_community_subnet_ipv6.asn_number = 65001;
+    bgp_community_subnet_ipv6.community_number = 666;
+
+
+    if (configuration_map.count("gobgp_community_subnet_ipv6")) {
+        if (!read_bgp_community_from_string(configuration_map["gobgp_community_subnet_ipv6"], bgp_community_subnet_ipv6)) {
+            logger << log4cpp::Priority::ERROR << "Cannot parse GoBGP community for IPv6 subnet " << configuration_map["gobgp_community_subnet_ipv6"];
+        }
+    }   
+
+    logger << log4cpp::Priority::INFO << "GoBGP subnet IPv6 community: " << bgp_community_subnet_ipv6.asn_number << ":" << bgp_community_subnet_ipv6.community_number;
 }
 
 void gobgp_action_shutdown() {
     delete gobgp_client;
 }
 
-void gobgp_ban_manage(std::string action, std::string ip_as_string, attack_details current_attack) {
+void gobgp_ban_manage(std::string action, bool ipv6, std::string ip_as_string, subnet_ipv6_cidr_mask_t client_ipv6, attack_details_t current_attack) {
     bool is_withdrawal = false;
+
+    std::string action_name;
 
     if (action == "ban") {
         is_withdrawal = false;
+        action_name = "announce";
     } else {
         is_withdrawal = true;
+        action_name = "withdraw";
     }
 
-    if (gobgp_announce_whole_subnet) {
-        std::string subnet_as_string_with_mask = convert_subnet_to_string(current_attack.customer_network);
+    if (ipv6) {
+        if (gobgp_announce_whole_subnet_ipv6) {
+            logger << log4cpp::Priority::ERROR << "Sorry but we do not support IPv6 per subnet announces";
+        }
 
-        gobgp_client->AnnounceUnicastPrefix(subnet_as_string_with_mask, gobgp_nexthop, is_withdrawal);
-    }
+        if (gobgp_announce_host_ipv6) {
+            logger << log4cpp::Priority::INFO << action_name << " " << print_ipv6_cidr_subnet(client_ipv6) << " to GoBGP";
+            uint32_t community_as_32bit_int = uint32_t(bgp_community_host_ipv6.asn_number << 16 | bgp_community_host_ipv6.community_number);
 
-    if (gobgp_announce_host) {
-        std::string ip_as_string_with_mask = ip_as_string + "/32";
+            gobgp_client->AnnounceUnicastPrefixIPv6(client_ipv6, ipv6_next_hop, is_withdrawal, community_as_32bit_int);
+        }
+    } else { 
+        if (gobgp_announce_whole_subnet) {
+            std::string subnet_as_string_with_mask = convert_subnet_to_string(current_attack.customer_network);
+            logger << log4cpp::Priority::INFO << action_name << " "
+                   << convert_subnet_to_string(current_attack.customer_network) << " to GoBGP";
 
-        gobgp_client->AnnounceUnicastPrefix(ip_as_string_with_mask, gobgp_nexthop, is_withdrawal);
+            // https://github.com/osrg/gobgp/blob/0aff30a74216f499b8abfabc50016b041b319749/internal/pkg/table/policy_test.go#L2870
+            uint32_t community_as_32bit_int = uint32_t(bgp_community_subnet.asn_number << 16 | bgp_community_subnet.community_number);
+
+            gobgp_client->AnnounceUnicastPrefixIPv4(convert_ip_as_uint_to_string(
+                                                current_attack.customer_network.subnet_address),
+                                                gobgp_nexthop, is_withdrawal,
+                                                current_attack.customer_network.cidr_prefix_length, community_as_32bit_int);
+        }
+
+        if (gobgp_announce_host) {
+            std::string ip_as_string_with_mask = ip_as_string + "/32";
+
+            logger << log4cpp::Priority::INFO << action_name << " " << ip_as_string_with_mask << " to GoBGP";
+
+            uint32_t community_as_32bit_int = uint32_t(bgp_community_host.asn_number << 16 | bgp_community_host.community_number);
+
+            gobgp_client->AnnounceUnicastPrefixIPv4(ip_as_string, gobgp_nexthop, is_withdrawal, 32, community_as_32bit_int);
+        }
     }
 }

@@ -1,21 +1,20 @@
-#ifndef FAST_LIBRARY_H
-#define FAST_LIBRARY_H
+#pragma once
 
 #include "fastnetmon_types.h"
 
-#include <stdint.h>
-#include <sys/types.h>
-#include <unistd.h>
-#include <string>
 #include <iostream>
 #include <map>
-#include <vector>
-#include <utility>
 #include <sstream>
+#include <stdint.h>
+#include <string>
+#include <sys/types.h>
+#include <unistd.h>
+#include <utility>
+#include <vector>
 
+#include <boost/regex.hpp>
 #include <boost/thread.hpp>
 #include <boost/thread/mutex.hpp>
-#include <boost/regex.hpp>
 
 #include <json-c/json.h>
 
@@ -24,9 +23,9 @@
 
 #include "libpatricia/patricia.h"
 
-#ifdef ENABLE_LUA_HOOKS
-#include <luajit-2.0/lua.hpp>
-#endif
+#include "fast_endianless.hpp"
+
+#include "fastnetmon_networks.hpp"
 
 #define TCP_FIN_FLAG_SHIFT 1
 #define TCP_SYN_FLAG_SHIFT 2
@@ -50,8 +49,8 @@ std::vector<std::string> exec(std::string cmd);
 uint32_t convert_ip_as_string_to_uint(std::string ip);
 std::string convert_ip_as_uint_to_string(uint32_t ip_as_integer);
 std::string convert_int_to_string(int value);
-std::string print_ipv6_address(struct in6_addr& ipv6_address);
-std::string print_simple_packet(simple_packet packet);
+std::string print_ipv6_address(const struct in6_addr& ipv6_address);
+std::string print_simple_packet(simple_packet_t packet);
 std::string convert_timeval_to_date(struct timeval tv);
 bool convert_hex_as_string_to_uint(std::string hex, uint32_t& value);
 
@@ -78,51 +77,49 @@ std::string get_net_address_from_network_as_string(std::string network_cidr_form
 std::string print_time_t_in_fastnetmon_format(time_t current_time);
 unsigned int get_cidr_mask_from_network_as_string(std::string network_cidr_format);
 void copy_networks_from_string_form_to_binary(std::vector<std::string> networks_list_as_string,
-                                              std::vector<subnet_t>& our_networks);
+                                              std::vector<subnet_cidr_mask_t>& our_networks);
 int convert_string_to_integer(std::string line);
-
-// Byte order type safe converters
-uint16_t fast_ntoh(uint16_t value);
-uint32_t fast_ntoh(uint32_t value);
-uint64_t fast_ntoh(uint64_t value);
-
-uint16_t fast_hton(uint16_t value);
-uint32_t fast_hton(uint32_t value);
-uint64_t fast_hton(uint64_t value);
 
 bool print_pid_to_file(pid_t pid, std::string pid_path);
 bool read_pid_from_file(pid_t& pid, std::string pid_path);
 
-direction get_packet_direction(patricia_tree_t* lookup_tree, uint32_t src_ip, uint32_t dst_ip, unsigned long& subnet, unsigned int& subnet_cidr_mask);
+direction_t get_packet_direction(patricia_tree_t* lookup_tree,
+                               uint32_t src_ip,
+                               uint32_t dst_ip,
+                               subnet_cidr_mask_t& subnet);
 
-direction get_packet_direction_ipv6(patricia_tree_t* lookup_tree, struct in6_addr src_ipv6, struct in6_addr dst_ipv6);
+direction_t get_packet_direction_ipv6(patricia_tree_t* lookup_tree, struct in6_addr src_ipv6, struct in6_addr dst_ipv6, subnet_ipv6_cidr_mask_t& subnet);
 
 std::string convert_prefix_to_string_representation(prefix_t* prefix);
 std::string find_subnet_by_ip_in_string_format(patricia_tree_t* patricia_tree, std::string ip);
-std::string convert_subnet_to_string(subnet_t my_subnet);
-std::string get_direction_name(direction direction_value);
-subnet_t convert_subnet_from_string_to_binary(std::string subnet_cidr);
-std::vector <std::string> split_strings_to_vector_by_comma(std::string raw_string);
-subnet_t convert_subnet_from_string_to_binary_with_cidr_format(std::string subnet_cidr);
+std::string convert_subnet_to_string(subnet_cidr_mask_t my_subnet);
+std::string get_direction_name(direction_t direction_value);
+subnet_cidr_mask_t convert_subnet_from_string_to_binary(std::string subnet_cidr);
+std::vector<std::string> split_strings_to_vector_by_comma(std::string raw_string);
+subnet_cidr_mask_t convert_subnet_from_string_to_binary_with_cidr_format(std::string subnet_cidr);
 
 #ifdef __linux__
 bool manage_interface_promisc_mode(std::string interface_name, bool switch_on);
 #endif
 
-#ifdef ENABLE_LUA_HOOKS
-lua_State* init_lua_jit(std::string lua_hooks_path);
-bool call_lua_function(std::string function_name, lua_State* lua_state_param, std::string client_addres_in_string_format, void* ptr);
-#endif
-
-std::string serialize_attack_description(attack_details& current_attack);
-attack_type_t detect_attack_type(attack_details& current_attack);
+bool ip_belongs_to_patricia_tree_ipv6(patricia_tree_t* patricia_tree, struct in6_addr client_ipv6_address);
+std::string serialize_attack_description(attack_details_t& current_attack);
+attack_type_t detect_attack_type(attack_details_t& current_attack);
 std::string get_printable_attack_name(attack_type_t attack);
-std::string serialize_network_load_to_text(map_element& network_speed_meter, bool average);
-json_object* serialize_attack_description_to_json(attack_details& current_attack);
-json_object* serialize_network_load_to_json(map_element& network_speed_meter);
-std::string serialize_statistic_counters_about_attack(attack_details& current_attack);
+std::string serialize_network_load_to_text(map_element_t& network_speed_meter, bool average);
+json_object* serialize_attack_description_to_json(attack_details_t& current_attack);
+json_object* serialize_network_load_to_json(map_element_t& network_speed_meter);
+std::string serialize_statistic_counters_about_attack(attack_details_t& current_attack);
 
 std::string dns_lookup(std::string domain_name);
 bool store_data_to_stats_server(unsigned short int graphite_port, std::string graphite_host, std::string buffer_as_string);
+bool get_interface_number_by_device_name(int socket_fd, std::string interface_name, int& interface_number);
 
-#endif
+bool set_boost_process_name(boost::thread* thread, std::string process_name);
+ std::string convert_subnet_to_string(subnet_cidr_mask_t my_subnet);
+
+ std::string print_ipv6_cidr_subnet(subnet_ipv6_cidr_mask_t subnet);
+ std::string convert_any_ip_to_string(subnet_ipv6_cidr_mask_t subnet);
+bool convert_string_to_positive_integer_safe(std::string line, int& value);
+bool read_ipv6_host_from_string(std::string ipv6_host_as_string, in6_addr& result);
+bool validate_ipv6_or_ipv4_host(const std::string host);

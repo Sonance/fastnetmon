@@ -1,24 +1,16 @@
-// log4cpp logging facility
-#include "log4cpp/Category.hh"
-#include "log4cpp/Appender.hh"
-#include "log4cpp/FileAppender.hh"
-#include "log4cpp/OstreamAppender.hh"
-#include "log4cpp/Layout.hh"
-#include "log4cpp/BasicLayout.hh"
-#include "log4cpp/PatternLayout.hh"
-#include "log4cpp/Priority.hh"
+#include "../all_logcpp_libraries.h"
 
 // For support uint32_t, uint16_t
 #include <sys/types.h>
 
 // For config map operations
-#include <string>
 #include <map>
+#include <string>
 
 // For support: IPPROTO_TCP, IPPROTO_ICMP, IPPROTO_UDP
-#include <sys/types.h>
-#include <sys/socket.h>
 #include <netinet/in.h>
+#include <sys/socket.h>
+#include <sys/types.h>
 
 #include "example_collector.h"
 
@@ -42,7 +34,7 @@ void start_example_collection(process_packet_pointer func_ptr) {
     }
 
     // We should fill this structure for passing to FastNetMon
-    simple_packet current_packet;
+    simple_packet_t current_packet;
 
     current_packet.src_ip = 0;
     current_packet.dst_ip = 0;

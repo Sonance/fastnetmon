@@ -3,12 +3,27 @@
 use strict;
 use warnings;
 
-unless (scalar @ARGV == 2) {
-    die "Please specify type and original binary file name: rpm fastnetmon-binary-git-0cfdfd5e2062ad94de24f2f383576ea48e6f3a07-debian-6.0.10-x86_64";
+my $error_message = "Please specify package type, original binary file name, version, distro name and version: rpm fastnetmon-binary-git-0cfdfd5e2062ad94de24f2f383576ea48e6f3a07-debian-6.0.10-x86_64 2.0.1 centos 8";
+
+unless (scalar @ARGV == 5) {
+    die "$error_message\n";
 }
+
 
 my $package_type = $ARGV[0];
 my $archive_name = $ARGV[1];
+my $package_version = $ARGV[2];
+my $distro_name = $ARGV[3];
+my $distro_version = $ARGV[4];
+
+unless ($package_type && $archive_name && $package_version && $distro_name && $distro_version) {
+    die "$error_message\n";
+}
+
+# Gzip does not compress well, let's use xz instead
+my $dpkg_deb_options = '-Zxz -z9';
+
+my $debian_architecture_name = 'amd64';
 
 if ($package_type eq 'rpm') {
     build_rpm_package();
@@ -18,10 +33,14 @@ if ($package_type eq 'rpm') {
 
 sub build_rpm_package {
     print "Install packages for crafting rpm packages\n";
-    `yum install -y rpmdevtools yum-utils`;
+    my $packages_install = system("yum install -y rpmdevtools yum-utils");
 
-    mkdir '/root/rpmbuild';
-    mkdir '/root/rpmbuild/SOURCES';
+    if ($packages_install != 0) {
+        die "Cannot install build packages\n";
+    }
+
+    mkdir '/root/rpmbuild' or die "Cannot create rpmbuild folder";;
+    mkdir '/root/rpmbuild/SOURCES' or die "Cannot create source folder";
 
     my $system_v_init_script = <<'DOC';
 #!/bin/bash
@@ -30,7 +49,7 @@ sub build_rpm_package {
 #
 # chkconfig: - 85 15
 # description: FastNetMon - high performance DoS/DDoS analyzer with sflow/netflow/mirror support
-# processname: fastnemon
+# processname: fastnetmon
 # config: /etc/fastnetmon.conf
 # pidfile: /var/run/fastnetmon.pid
 #
@@ -127,22 +146,35 @@ DOC
     my $rpm_sources_path = '/root/rpmbuild/SOURCES';
 
     # Copy bundle to build tree
-    `cp $archive_name $rpm_sources_path/archive.tar.gz`;
+    my $copy_res = system("cp $archive_name $rpm_sources_path/archive.tar.gz");
 
-    `wget --no-check-certificate https://raw.githubusercontent.com/pavel-odintsov/fastnetmon/master/src/fastnetmon.conf -O$rpm_sources_path/fastnetmon.conf`;
+    if ($copy_res != 0) {
+        die "Cannot copy file $archive_name to $rpm_sources_path/archive.tar.gz\n";
+    }
+
+    if (defined($ENV{'CIRCLECI'})) {
+        my $conf_path = $ENV{'CIRCLE_WORKING_DIRECTORY'} . '/src/fastnetmon.conf';
+
+        my $conf_copy_res = system("cp $conf_path $rpm_sources_path/fastnetmon.conf");
+
+        if ($conf_copy_res != 0) {
+            die "Cannot copy fastnetmon.conf from $conf_path to $rpm_sources_path/fastnetmon.conf\n";
+        }
+    } else {
+        my $wget_res = system("wget --no-check-certificate https://raw.githubusercontent.com/pavel-odintsov/fastnetmon/master/src/fastnetmon.conf -O$rpm_sources_path/fastnetmon.conf");
    
-    open my $system_v_init_fl, ">", "$rpm_sources_path/system_v_init";
-    print {$system_v_init_fl} $system_v_init_script;
-    close $system_v_init_fl;
+        if ($wget_res != 0) {
+            die "Cannot download fastnetmon.conf\n";
+        }
+    }
 
-    open my $systemd_init_fl, ">", "$rpm_sources_path/systemd_init";
-    print {$systemd_init_fl} $systemd_init_script;
-    close $systemd_init_fl;
+    put_text_to_file("$rpm_sources_path/system_v_init", $system_v_init_script);
+    put_text_to_file("$rpm_sources_path/systemd_init", $systemd_init_script);
 
     # Create files list from archive
-    # ./luajit_2.0.4/
+    # ./libname_1.2.3/
     my @files_list = `tar -tf /root/rpmbuild/SOURCES/archive.tar.gz`;
-    chomp  @files_list;
+    chomp @files_list;
 
     # Replace path
     @files_list = map { s#^\.#/opt#; $_ } @files_list;
@@ -150,7 +182,11 @@ DOC
     # Filter out folders
     @files_list = grep { ! m#/$# } @files_list;
 
-    my $systemd_spec_file = <<'DOC';
+    if (scalar @files_list == 0) {
+        die "Files must not be empty\n";
+    }
+
+    my $spec_file_header = <<'DOC';
 #
 # Pre/post params: https://fedoraproject.org/wiki/Packaging:ScriptletSnippets
 #
@@ -161,7 +197,17 @@ DOC
 %global  fastnetmon_config_path %{_sysconfdir}/fastnetmon.conf
 
 Name:              fastnetmon
-Version:           1.1.3
+
+DOC
+
+    # We do need variable interpolation here
+    my $spec_file_version = <<DOC;
+
+Version:           $package_version
+
+DOC
+
+    my $spec_file_summary_section = <<'DOC';
 Release:           1%{?dist}
 
 Summary:           A high performance DoS/DDoS load analyzer built on top of multiple packet capture engines (NetFlow, IPFIX, sFLOW, netmap, PF_RING, PCAP).
@@ -176,17 +222,29 @@ Source0:           http://178.62.227.110/fastnetmon_binary_repository/test_binar
 AutoReq:           no
 AutoProv:          no
 
-Requires:          libpcap, numactl, libicu
+DOC
+
+    my $spec_file_requires_systemd_section = <<'DOC';
+
+Requires:          libpcap
 Requires(pre):     shadow-utils
 Requires(post):    systemd
 Requires(preun):   systemd
 Requires(postun):  systemd
 Provides:          fastnetmon
 
+DOC
+
+    my $spec_file_description_section = <<'DOC';
+
 %description
 A high performance DoS/DDoS load analyzer built on top of multiple packet capture
 engines (NetFlow, IPFIX, sFLOW, netmap, PF_RING, PCAP).
 
+
+DOC
+
+    my $spec_file_prep_section = <<'DOC';
 %prep
 
 rm -rf fastnetmon-tree
@@ -194,11 +252,20 @@ mkdir fastnetmon-tree
 mkdir fastnetmon-tree/opt
 tar -xvvf /root/rpmbuild/SOURCES/archive.tar.gz -C fastnetmon-tree/opt
 
+DOC
+
+my $spec_file_prep_footer_systemd_section = <<'DOC';
+
 # Copy service scripts
 mkdir fastnetmon-tree/etc
 cp /root/rpmbuild/SOURCES/systemd_init fastnetmon-tree/etc
 cp /root/rpmbuild/SOURCES/fastnetmon.conf fastnetmon-tree/etc
 
+DOC
+
+    my $systemd_spec_file = $spec_file_header . $spec_file_version . $spec_file_summary_section . $spec_file_requires_systemd_section . $spec_file_description_section . $spec_file_prep_section . $spec_file_prep_footer_systemd_section;
+
+    $systemd_spec_file .= <<'DOC';
 %build
 
 # We do not build anything
@@ -265,54 +332,31 @@ fi
 - First RPM package release
 DOC
 
-    my $spec_file = <<'DOC';
-#
-# Pre/post params: https://fedoraproject.org/wiki/Packaging:ScriptletSnippets
-#
+   my $spec_file_init_d_section = <<'DOC';
 
-%global  fastnetmon_attackdir   %{_localstatedir}/log/fastnetmon_attacks
-%global  fastnetmon_user        root
-%global  fastnetmon_group       %{fastnetmon_user}
-%global  fastnetmon_config_path %{_sysconfdir}/fastnetmon.conf
-
-Name:              fastnetmon
-Version:           1.1.3
-Release:           1%{?dist}
-
-Summary:           A high performance DoS/DDoS load analyzer built on top of multiple packet capture engines (NetFlow, IPFIX, sFLOW, netmap, PF_RING, PCAP).
-Group:             System Environment/Daemons
-License:           GPLv2
-URL:               https://fastnetmon.com
-
-# Top level fodler inside archive should be named as "fastnetmon-1.1.1" 
-Source0:           http://178.62.227.110/fastnetmon_binary_repository/test_binary_builds/this_fake_path_do_not_check_it/archive.tar.gz
-
-# Disable any sort of dynamic dependency detection for our own custom bunch of binaries
-AutoReq:           no
-AutoProv:          no
-
-Requires:          libpcap, numactl, libicu
+Requires:          libpcap, numactl
 Requires(pre):     shadow-utils
 Requires(post):    chkconfig
 Requires(preun):   chkconfig, initscripts
 Requires(postun):  initscripts
 Provides:          fastnetmon
 
-%description
-A high performance DoS/DDoS load analyzer built on top of multiple packet capture
-engines (NetFlow, IPFIX, sFLOW, netmap, PF_RING, PCAP).
+DOC
 
-%prep
-
-rm -rf fastnetmon-tree
-mkdir fastnetmon-tree
-mkdir fastnetmon-tree/opt
-tar -xvvf /root/rpmbuild/SOURCES/archive.tar.gz -C fastnetmon-tree/opt
+my $spec_file_prep_footer_init_d_section = <<'DOC';
 
 # Copy service scripts
 mkdir fastnetmon-tree/etc
 cp /root/rpmbuild/SOURCES/system_v_init fastnetmon-tree/etc
 cp /root/rpmbuild/SOURCES/fastnetmon.conf fastnetmon-tree/etc
+
+DOC
+
+
+   my $spec_file = $spec_file_header . $spec_file_version . $spec_file_summary_section . $spec_file_init_d_section . $spec_file_description_section . $spec_file_prep_section 
+       . $spec_file_prep_footer_init_d_section;
+
+   $spec_file .= <<'DOC';
 
 %build
 
@@ -383,22 +427,34 @@ fi
 - First RPM package release
 DOC
 
-    my $selected_spec_file = $spec_file;
+    my $selected_spec_file = $systemd_spec_file;
 
-    # For CentOS we use systemd
-    if ($archive_name =~ m/centos-7/) {
-        $selected_spec_file = $systemd_spec_file;
+    # Only for CentOS 6 we use old apprach based on init scripts, for newer centos versions we use systemd
+    if ($distro_name eq 'centos' && $distro_version eq '6') {
+        $selected_spec_file = $spec_file;
     }
 
+    # Add full list of files into RPM spec
     my $joined_file_list = join "\n", @files_list;
     $selected_spec_file =~ s/\{files_list\}/$joined_file_list/;
+    
+    put_text_to_file("generated_spec_file.spec", $selected_spec_file);
 
-    open my $fl, ">", "generated_spec_file.spec" or die "Can't create spec file\n";
-    print {$fl} $selected_spec_file;
-    system("rpmbuild -bb generated_spec_file.spec");
+    my $rpmbuild_res = system("rpmbuild -bb generated_spec_file.spec");
 
-    mkdir "/tmp/result_data";
-    `cp /root/rpmbuild/RPMS/x86_64/* /tmp/result_data`;
+    if ($rpmbuild_res != 0) {
+        die "Rpmbuild failed with code $rpmbuild_res\n";
+    }
+
+    mkdir "/tmp/result_data" or die "Cannot create result_data folder";
+    my $copy_rpm_res = system("cp /root/rpmbuild/RPMS/x86_64/* /tmp/result_data");
+    
+    if ($copy_rpm_res != 0) {
+        die "Cannot copy result rpm\n";
+    }
+
+    print "Result RPM:\n";
+    print `ls -la /tmp/result_data`;
 }
 
 sub build_deb_package {
@@ -406,21 +462,44 @@ sub build_deb_package {
 
     my $fastnetmon_systemd_unit = <<'DOC';
 [Unit]
-Description=FastNetMon - DoS/DDoS analyzer with sflow/netflow/mirror support
+Description=FastNetMon - DoS/DDoS analyzer with sFlow/netflow/mirror support
 After=network.target remote-fs.target
  
 [Service]
 Type=forking
 ExecStart=/opt/fastnetmon/fastnetmon --daemonize
 PIDFile=/run/fastnetmon.pid
-
-#ExecReload=/bin/kill -s HUP $MAINPID
-#ExecStop=/bin/kill -s QUIT $MAINPID
  
 [Install]
 WantedBy=multi-user.target
 DOC
 
+my $fastnetmon_upstart_init = <<'DOC';
+description "FastNetMon DDoS detection daemon"
+author "Pavel Odintsov <pavel.odintsov@gmail.com>"
+
+start on (filesystem and net-device-up IFACE=lo and started mongod)
+stop on runlevel [!2345]
+
+env DAEMON=/opt/fastnetmon/fastnetmon
+env DAEMON_OPTIONS="--daemonize"
+env PID=/run/fastnetmon.pid
+
+# Expect 2 forks from service
+expect daemon
+#respawn
+#respawn limit 10 5
+#oom never
+
+# We are using SIGINT for correct shutdown instead of SIGTERM
+kill signal SIGINT
+
+# We should give some time to polite tool shutdown
+# and we will wait this time until we send SIGKILL to toolkit
+kill timeout 5
+
+exec $DAEMON $DAEMON_OPTIONS
+DOC
 my $fastnetmon_systemv_init = <<'DOC';
 #!/bin/sh
 ### BEGIN INIT INFO
@@ -481,17 +560,54 @@ esac
 exit 0
 DOC
 
-    # dpkg-deb: warning: '/tmp/tmp.gbd1VXGPQB/DEBIAN/control' contains user-defined field '#Standards-Version'
-my $fastnetmon_control_file = <<'DOC';
+my $fastnetmon_control_file = <<DOC;
 Package: fastnetmon
-Maintainer: Pavel Odintsov <pavel.odintsov@gmail.com>
+Maintainer: Pavel Odintsov <pavel.odintsov\@gmail.com>
 Section: misc
 Priority: optional
-Architecture: amd64
-Version: 1.1.3
-Depends: libpcap0.8, libnuma1
-Description: Very fast DDoS analyzer with sflow/netflow/mirror support
+Architecture: $debian_architecture_name
+Version: $package_version
+Depends: libpcap0.8, libatomic1
+Description: Very fast DDoS analyzer with sFlow/Netflow/IPFIX and mirror support
  FastNetMon - A high performance DoS/DDoS attack sensor.
+DOC
+
+my $fastnetmon_prerm_hook = <<DOC;
+#!/bin/sh
+
+# Stop fastnetmon correctly
+/usr/sbin/service fastnetmon stop
+
+exit 0
+DOC
+
+# Prevent /opt remove by apt-get remove of our package
+# http://stackoverflow.com/questions/13021002/my-deb-file-removes-opt
+my $fastnetmon_server_postrm_hook = <<DOC;
+#!/bin/sh
+
+# If apt-get decided to remove /opt, let's create it again
+/bin/mkdir -p -m 755 /opt
+/bin/chmod 755 /opt
+
+exit 0
+DOC
+
+my $fastnetmon_postinst_hook = <<DOC;
+#!/bin/sh
+
+if [ -e "/sbin/initctl" ]; then
+    # Update Upstart configuration
+    /sbin/initctl reload-configuration
+else
+    # Update systemd configuration
+    /bin/systemctl daemon-reload
+fi
+
+# Start daemon correctly
+/usr/sbin/service fastnetmon start
+
+exit 0
 DOC
 
     my $folder_for_build = `mktemp -d`;
@@ -501,40 +617,137 @@ DOC
         die "Can't create temp folder\n";
     }
 
-    chdir $folder_for_build;
+    # I see no reasons why we should keep it secure
+    system("chmod 755 $folder_for_build");
 
-    mkdir "$folder_for_build/DEBIAN";
+    chdir $folder_for_build or die "Cannot chdir to $folder_for_build\n";
+
+    mkdir "$folder_for_build/DEBIAN" or die "Cannot create DEBIAN folder\n";;
     put_text_to_file("$folder_for_build/DEBIAN/control", $fastnetmon_control_file);
+    
+    put_text_to_file("$folder_for_build/DEBIAN/prerm", $fastnetmon_prerm_hook);
+    put_text_to_file("$folder_for_build/DEBIAN/postinst", $fastnetmon_postinst_hook);
+    put_text_to_file("$folder_for_build/DEBIAN/postrm", $fastnetmon_server_postrm_hook);
 
+    # Set exec bits for all of them
+    my @deb_hooks_list = ("$folder_for_build/DEBIAN/postrm", "$folder_for_build/DEBIAN/prerm", "$folder_for_build/DEBIAN/postinst");
+
+    for my $hook_path (@deb_hooks_list) {
+        my $chmod_res = system("chmod +x $hook_path");
+
+        if ($chmod_res != 0) {
+            die "Cannot set chmod for $hook_path\n";
+        }
+    }
     # Create init files for different versions of Debian like OS 
-    mkdir "$folder_for_build/etc";
-    mkdir "$folder_for_build/etc/init.d";
+    mkdir "$folder_for_build/etc" or die "Cannot create etc folder\n";
+    mkdir "$folder_for_build/etc/init" or die "Cannot create init folder\n";
+    mkdir "$folder_for_build/etc/init.d" or die "Cannot create init.d folder\n";
 
     put_text_to_file("$folder_for_build/etc/init.d/fastnetmon", $fastnetmon_systemv_init);
-    chmod 0755, "$folder_for_build/etc/init.d/fastnetmon";
+    chmod 0755, "$folder_for_build/etc/init.d/fastnetmon" or die "Cannot set exec bit for init.d/fastntemon";;
 
-    # systemd
-    mkdir "$folder_for_build/lib";
-    mkdir "$folder_for_build/lib/systemd";
-    mkdir "$folder_for_build/lib/systemd/system";
- 
+    # Create folders for system service file
+    mkdir "$folder_for_build/lib" or die "Cannot create lib folder";
+    mkdir "$folder_for_build/lib/systemd" or die "Cannot create systemd folder";;
+    mkdir "$folder_for_build/lib/systemd/system" or die "Cannot create systemd/system folder";
+
+    # Create symlinks to call commands without full path
+    mkdir "$folder_for_build/usr" or die "Cannot create usr folder";
+    mkdir "$folder_for_build/usr/bin" or die "Cannot reate usr/bin folder";
+
+    my $fastnetmon_client_ln_res = system("ln -s /opt/fastnetmon/fastnetmon_client $folder_for_build/usr/bin/fastnetmon_client");
+
+    if ($fastnetmon_client_ln_res != 0) {
+        die "Cannot create symlink for fastnetmon_client";
+    }
+
+    my $fastnetmon_api_client_ln_res = system("ln -s /opt/fastnetmon/fastnetmon_api_client $folder_for_build/usr/bin/fastnetmon_api_client");
+
+    if ($fastnetmon_api_client_ln_res != 0) {
+        die "Cannot create symlink for fastnetmon_api_client";
+    }
+
+    my $fastnetmon_ln_res = system("ln -s /opt/fastnetmon/fastnetmon $folder_for_build/usr/bin/fastnetmon");
+
+    if ($fastnetmon_ln_res != 0) {
+        die "Cannot create symlink for fastnetmon";
+    }
+
     put_text_to_file("$folder_for_build/lib/systemd/system/fastnetmon.service", $fastnetmon_systemd_unit);
+    put_text_to_file("$folder_for_build/etc/init/fastnetmon.conf", $fastnetmon_upstart_init);
 
     # Configuration file
     put_text_to_file("$folder_for_build/DEBIAN/conffiles", "etc/fastnetmon.conf\n");
 
     # Create folder for config
-    mkdir("$folder_for_build/etc");
-    print `wget --no-check-certificate https://raw.githubusercontent.com/pavel-odintsov/fastnetmon/master/src/fastnetmon.conf -O$folder_for_build/etc/fastnetmon.conf`;
+    my $mkdir_etc_res = system("mkdir -p $folder_for_build/etc");
 
-    `cp $archive_name $folder_for_build/archive.tar.gz`;
+    if ($mkdir_etc_res != 0) {
+        die "Cannot create folder $folder_for_build/etc\n";
+    }
 
-    mkdir "$folder_for_build/opt";
-    print `tar -xf $folder_for_build/archive.tar.gz  -C $folder_for_build/opt`;
-    unlink("$folder_for_build/archive.tar.gz");
 
-    mkdir "/tmp/result_data";
-    system("dpkg-deb --build $folder_for_build /tmp/result_data/fastnetmon_package.deb");
+    if (defined($ENV{'CIRCLECI'})) {
+        my $conf_path = $ENV{'CIRCLE_WORKING_DIRECTORY'} . '/src/fastnetmon.conf';
+
+        my $conf_copy_res = system("cp $conf_path $folder_for_build/etc/fastnetmon.conf");
+
+        if ($conf_copy_res != 0) {
+            die "Cannot copy fastnetmon.conf from $conf_path to $folder_for_build/etc/fastnetmon.conf\n";
+        }
+    } else {
+        my $wget_res = system("wget --no-check-certificate https://raw.githubusercontent.com/pavel-odintsov/fastnetmon/master/src/fastnetmon.conf -O$folder_for_build/etc/fastnetmon.conf");
+   
+        if ($wget_res != 0) {
+            die "Cannot download fastnetmon.conf\n";
+        }
+    }
+
+    my $copy_archive_res = system("cp $archive_name $folder_for_build/archive.tar.gz");
+
+    if ($copy_archive_res != 0) {
+        die "Cannot cop archive\n";
+    }
+
+    mkdir "$folder_for_build/opt" or die "Cannot create opt folder";;
+    my $chmod_opt_res = system("chmod 755 $folder_for_build/opt");
+
+    if ($chmod_opt_res != 0) {
+        die "Cannot set chmod for /opt";
+    }
+
+    my $tar_res = system("tar -xf $folder_for_build/archive.tar.gz  -C $folder_for_build/opt");
+
+    if ($tar_res != 0) {
+        die "Cannot decompress folder with error: $tar_res\n";
+    }
+
+    # unlink("$folder_for_build/archive.tar.gz");
+
+    # Set new permissions again. Probably, they was overwritten by tar -xf command
+    my $opt_chmod_res = system("chmod 755 $folder_for_build/opt");
+
+    if ($opt_chmod_res != 0) {
+        die "Cannot set chmod for /opt";
+    }
+
+    # Change owner to root for all files inside build folder
+    my $opt_chown_res = system("chown root:root -R $folder_for_build");
+
+    if ($opt_chown_res != 0) {
+        die "Cannot chown /opt";
+    }
+
+    my $deb_build_command = "dpkg-deb  --debug  --verbose $dpkg_deb_options --build $folder_for_build /tmp/fastnetmon_${package_version}_${debian_architecture_name}.deb";
+
+    print "Build command: $deb_build_command\n";
+
+    my $deb_build_res = system($deb_build_command);
+
+    if ($deb_build_res != 0) {
+        die "dpkg-deb failed with error code: $deb_build_res\n";
+    }
 }
 
 sub put_text_to_file {

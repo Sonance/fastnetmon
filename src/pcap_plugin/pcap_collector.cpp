@@ -1,32 +1,23 @@
-#include <sys/types.h>
-#include <sys/socket.h>
+#include <inttypes.h>
 #include <netinet/in.h>
 #include <stdio.h>
-#include <string.h>
 #include <stdlib.h>
+#include <string.h>
+#include <sys/socket.h>
 #include <sys/types.h>
-#include <inttypes.h>
 
 #include <map>
 #include <string>
 
-#include <pcap.h>
 #include <net/if_arp.h> // struct arphdr
 #include <netinet/if_ether.h>
 #include <netinet/ip.h>
+#include <netinet/ip_icmp.h>
 #include <netinet/tcp.h>
 #include <netinet/udp.h>
-#include <netinet/ip_icmp.h>
+#include <pcap.h>
 
-// log4cpp logging facility
-#include "log4cpp/Category.hh"
-#include "log4cpp/Appender.hh"
-#include "log4cpp/FileAppender.hh"
-#include "log4cpp/OstreamAppender.hh"
-#include "log4cpp/Layout.hh"
-#include "log4cpp/BasicLayout.hh"
-#include "log4cpp/PatternLayout.hh"
-#include "log4cpp/Priority.hh"
+#include "../all_logcpp_libraries.h"
 
 #include "pcap_collector.h"
 
@@ -43,7 +34,7 @@ unsigned int DATA_SHIFT_VALUE = 14;
 #define VLAN_HDRLEN 4
 
 #ifndef DLT_LINUX_SLL
-#define DLT_LINUX_SLL	113
+#define DLT_LINUX_SLL 113
 #endif
 
 extern log4cpp::Category& logger;
@@ -117,7 +108,7 @@ void parse_packet(u_char* user, struct pcap_pkthdr* packethdr, const u_char* pac
     // host byte order
     unsigned int packet_length = ntohs(iphdr->ip_len);
 
-    simple_packet current_packet;
+    simple_packet_t current_packet;
 
     // Advance to the transport layer header then parse and display
     // the fields based on the type of hearder: tcp, udp or icmp
@@ -194,8 +185,7 @@ void pcap_main_loop(const char* dev) {
     int set_buffer_size_res = pcap_set_buffer_size(descr, pcap_buffer_size_mbytes * 1024 * 1024);
     if (set_buffer_size_res != 0) {
         if (set_buffer_size_res == PCAP_ERROR_ACTIVATED) {
-            logger << log4cpp::Priority::ERROR
-                   << "Can't set buffer size because pcap already activated\n";
+            logger << log4cpp::Priority::ERROR << "Can't set buffer size because pcap already activated\n";
             exit(1);
         } else {
             logger << log4cpp::Priority::ERROR << "Can't set buffer size due to error: " << set_buffer_size_res;
