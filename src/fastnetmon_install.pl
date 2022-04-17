@@ -29,7 +29,7 @@ my $user_email = '';
 my $install_log_path = "/tmp/fastnetmon_install_$$.log";
 
 # So, you could disable this option but without this feature we could not improve FastNetMon for your distribution
-my $do_not_track_me = '';
+my $do_not_track_me = '1';
 
 sub send_tracking_information {
     my $step = shift;
@@ -64,7 +64,7 @@ my $pf_ring_version = '6.0.3';
 my $pf_ring_url = "https://github.com/ntop/PF_RING/archive/v$pf_ring_version.tar.gz";
 my $pf_ring_sha = '9fb8080defd1a079ad5f0097e8a8adb5bc264d00';
 
-my $fastnetmon_git_path = 'https://github.com/pavel-odintsov/fastnetmon.git';
+my $fastnetmon_git_path = 'https://github.com/Sonance/fastnetmon.git';
 
 my $temp_folder_for_building_project = `mktemp -d /tmp/fastnetmon.build.dir.XXXXXXXXXX`;
 chomp $temp_folder_for_building_project;
@@ -79,7 +79,6 @@ my $fastnetmon_code_dir = "$temp_folder_for_building_project/fastnetmon/src";
 
 # Official mirror: https://github.com/ntop/nDPI.git
 # But we have some patches for NTP and DNS protocols here
-my $ndpi_repository = 'https://github.com/pavel-odintsov/nDPI.git';
 
 my $stable_branch_name = 'v1.1.5';
 
@@ -379,9 +378,6 @@ sub main {
 
     install_json_c();
 
-    if ($we_have_ndpi_support) {
-        install_ndpi();
-    }
 
     if ($we_have_luajit_support) {
         install_luajit();

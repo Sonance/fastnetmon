@@ -226,7 +226,7 @@ if (ENABLE_DPI_SUPPORT)
 
     add_library(fast_dpi STATIC fast_dpi.cpp)
 
-    set(NDPI_INCLUDE_DIRS "/opt/ndpi/include/libndpi-1.7.1")
+    set(NDPI_INCLUDE_DIRS "/opt/ndpi/include/libndpi-1.7.0")
 
     find_library(NDPI_LIBRARIES NAMES ndpi PATHS "/opt/ndpi/lib" NO_DEFAULT_PATH)
 
