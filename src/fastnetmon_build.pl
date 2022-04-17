@@ -77,7 +77,7 @@ my $fastnetmon_code_dir = "$temp_folder_for_building_project/fastnetmon/src";
 # But we have some patches for NTP and DNS protocols here
 my $ndpi_repository = 'https://github.com/pavel-odintsov/nDPI.git';
 
-my $stable_branch_name = 'v1.1.5';
+my $stable_branch_name = 'v1.1.9';
 
 # By default do not use mirror
 my $use_mirror = '';
@@ -1662,7 +1662,7 @@ sub install_boost {
 
     print "Install Boost dependencies\n";
    
-    my $url_boost = "https://dl.bintray.com/boostorg/release/1.74.0/source/boost_1_74_0.tar.bz2";
+    my $url_boost = "https://boostorg.jfrog.io/artifactory/main/release/1.74.0/source/boost_1_74_0.tar.bz2";
 
     # For some reasons we cannot download default URL on Debian 8 
     if ($distro_type eq 'debian' && int($distro_version) == 8) {
