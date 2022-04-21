@@ -35,6 +35,8 @@
 
 #include "fastnetmon_logic.hpp"
 
+#include "metrics/clickhousedb.hpp"
+
 #ifdef ENABLE_DPI
 #include "fast_dpi.h"
 #endif
@@ -445,6 +447,12 @@ std::string graphite_prefix = "fastnetmon";
 
 bool process_incoming_traffic = true;
 bool process_outgoing_traffic = true;
+
+// InfluxDB
+std::string clickhousedb_database = "fastnetmon";
+std::string clickhousedb_user = "";
+std::string clickhousedb_password = "";
+unsigned int clickhousedb_push_period = 1;
 
 // Prototypes
 #ifdef ENABLE_DPI
@@ -1647,6 +1655,8 @@ int main(int argc, char** argv) {
     if (unban_enabled) {
         service_thread_group.add_thread(new boost::thread(cleanup_ban_list));
     }
+
+    service_thread_group.add_thread(new boost::thread(clickhouse_push_thread));
 
     // This thread will check about filled buckets with packets and process they
     auto check_traffic_buckets_thread = new boost::thread(check_traffic_buckets);

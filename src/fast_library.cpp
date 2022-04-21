@@ -1488,3 +1488,38 @@ bool validate_ipv6_or_ipv4_host(const std::string host) {
     return true;
 }
 
+// Write data to influxdb
+bool write_data_to_clickhousedb(std::string database, clickhouse::Block& block) {
+
+    clickhouse::Client client(clickhouse::ClientOptions().SetHost("localhost"));
+
+    //std::cout << "Push rows: "<< block.GetRowCount()<<"\n";
+    client.Insert("fastnetmon.host_metrics", block);
+
+	
+    return true;
+}
+
+uint64_t get_current_unix_time_in_nanoseconds() {
+    auto unix_timestamp                 = std::chrono::seconds(std::time(NULL));
+    uint64_t unix_timestamp_nanoseconds = std::chrono::milliseconds(unix_timestamp).count() * 1000 * 1000;
+    return unix_timestamp_nanoseconds;
+}
+
+// Joins data to format a=b,d=f
+std::string join_by_comma_and_equal(std::map<std::string, std::string>& data) {
+    std::stringstream buffer;
+
+    for (auto itr = data.begin(); itr != data.end(); ++itr) {
+        buffer << itr->first << "=" << itr->second;
+
+        // it's last element
+        if (std::distance(itr, data.end()) == 1) {
+            // Do not print comma
+        } else {
+            buffer << ",";
+        }
+    }
+
+    return buffer.str();
+}

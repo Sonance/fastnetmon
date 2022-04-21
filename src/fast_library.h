@@ -16,6 +16,9 @@
 #include <boost/thread.hpp>
 #include <boost/thread/mutex.hpp>
 
+#include <clickhouse/client.h>
+#include <clickhouse/types/type_parser.h>
+
 #include <json-c/json.h>
 
 // Boost libs
@@ -123,3 +126,9 @@ bool set_boost_process_name(boost::thread* thread, std::string process_name);
 bool convert_string_to_positive_integer_safe(std::string line, int& value);
 bool read_ipv6_host_from_string(std::string ipv6_host_as_string, in6_addr& result);
 bool validate_ipv6_or_ipv4_host(const std::string host);
+
+uint64_t get_current_unix_time_in_nanoseconds();
+
+bool write_data_to_clickhousedb(std::string database, clickhouse::Block& block);
+
+std::string join_by_comma_and_equal(std::map<std::string, std::string>& data);

@@ -119,7 +119,7 @@ add_executable(fastnetmon fastnetmon.cpp)
 # Get last commit hash
 execute_process(COMMAND git rev-list HEAD COMMAND head -n 1 OUTPUT_VARIABLE GIT_LAST_COMMIT_HASH OUTPUT_STRIP_TRAILING_WHITESPACE)
 
-set(FASTNETMON_APPLICATION_VERSION "1.2.0 master git-${GIT_LAST_COMMIT_HASH}")
+set(FASTNETMON_APPLICATION_VERSION "1.1.9 master git-${GIT_LAST_COMMIT_HASH}")
 configure_file(fast_platform.h.template "${PROJECT_SOURCE_DIR}/fast_platform.h")
 
 # Use new Memory Model Aware Atomic Operations
@@ -590,25 +590,16 @@ endif()
 
 find_path(CLICKHOUSE_INCLUDES_FOLDER NAMES clickhouse/client.h PATHS "/opt/clickhouse/include" NO_DEFAULT_PATH)
 find_library(CLICKHOUSE_LIBRARY_PATH NAMES clickhouse-cpp-lib PATHS "/opt/clickhouse/lib" NO_DEFAULT_PATH)
-find_library(LZ4_LIBRARY_PATH NAMES lz4-lib PATHS "/opt/clickhouse/contrib/lz4" NO_DEFAULT_PATH)
-find_library(CITYHASH_LIBRARY_PATH NAMES cityhash-lib PATHS "/opt/clickhouse/contrib/cityhash" NO_DEFAULT_PATH)
 
-
-if (CLICKHOUSE_INCLUDES_FOLDER AND CLICKHOUSE_LIBRARY_PATH AND LZ4_LIBRARY_PATH AND CITYHASH_LIBRARY_PATH)
+if (CLICKHOUSE_INCLUDES_FOLDER AND CLICKHOUSE_LIBRARY_PATH)
     include_directories(/opt/clickhouse/contrib)
-    include_directories(${CLICKHOUSE_INCLUDES_FOLDER})
+    include_directories(${CLICKHOUSE_INCLUDES_FOLDER}) 
     message(STATUS "We have found clickhouse library correctly: ${CLICKHOUSE_LIBRARY_PATH}")
-    message(STATUS "We have found LZ4 library correctly: ${LZ4_LIBRARY_PATH}")
-    message(STATUS "We have found CityHash library correctly: ${CITYHASH_LIBRARY_PATH}")
 else()
     message(FATAL_ERROR "We can't find clickhouse library! Can't build project")
 endif()
 
-target_link_libraries(fast_library /opt/clickhouse/lib/libclickhouse-cpp-lib.a
-	                           /opt/clickhouse/contrib/lz4/liblz4-lib.a
-	                           /opt/clickhouse/contrib/cityhash/libcityhash-lib.a)
-			   
-#target_link_libraries(fast_library ${CLICKHOUSE_LIBRARY_PATH})
+target_link_libraries(fast_library ${CLICKHOUSE_LIBRARY_PATH})
 
 target_link_libraries(fast_library ${JSONC_LIBRARY_PATH})
 
@@ -618,8 +609,7 @@ target_link_libraries(fast_library ${OPENSSL_CRYPTO_LIBRARY_PATH})
 if (ENABLE_DPI_SUPPORT)
     target_link_libraries(fastnetmon fast_dpi)
 endif()
-#target_link_libraries(fastnetmon ${LZ4_LIBRARY_PATH})
-#target_link_libraries(fastnetmon ${CITYHASH_LIBRARY_PATH})
+
 target_link_libraries(fastnetmon ${LOG4CPP_LIBRARY_PATH})
 
 target_link_libraries(fastnetmon ${CMAKE_THREAD_LIBS_INIT})
