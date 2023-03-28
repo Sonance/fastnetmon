@@ -129,6 +129,6 @@ bool validate_ipv6_or_ipv4_host(const std::string host);
 
 uint64_t get_current_unix_time_in_nanoseconds();
 
-bool write_data_to_clickhousedb(std::string database, clickhouse::Block& block);
+bool write_data_to_clickhousedb(std::string database, std::string table, clickhouse::Block& block);
 
 std::string join_by_comma_and_equal(std::map<std::string, std::string>& data);

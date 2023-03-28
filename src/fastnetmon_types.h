@@ -19,6 +19,10 @@
 
 #include "fastnetmon_networks.hpp"
 
+typedef std::vector<simple_packet_t> vector_of_packets;
+
+typedef std::map<subnet_cidr_mask_t, vector_of_packets> map_of_packets;
+
 typedef std::vector<map_element_t> vector_of_counters_t;
 
 typedef std::map<std::string, std::string> configuration_map_t;

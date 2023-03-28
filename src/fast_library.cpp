@@ -1489,12 +1489,12 @@ bool validate_ipv6_or_ipv4_host(const std::string host) {
 }
 
 // Write data to influxdb
-bool write_data_to_clickhousedb(std::string database, clickhouse::Block& block) {
+bool write_data_to_clickhousedb(std::string database, std::string table, clickhouse::Block& block) {
 
     clickhouse::Client client(clickhouse::ClientOptions().SetHost("localhost"));
 
     //std::cout << "Push rows: "<< block.GetRowCount()<<"\n";
-    client.Insert("fastnetmon.host_metrics", block);
+    client.Insert(table, block);
 
 	
     return true;

@@ -68,6 +68,7 @@ extern double average_calculation_amount_for_subnets;
 extern bool print_configuration_params_on_the_screen;
 extern uint64_t our_ipv6_packets;
 extern map_of_vector_counters_t SubnetVectorMap;
+extern map_of_packets PacketMap;
 extern uint64_t non_ip_packets; 
 extern uint64_t total_simple_packets_processed;
 extern unsigned int maximum_time_since_bucket_start_to_remove;
@@ -118,6 +119,7 @@ extern u_int32_t ndpi_size_id_struct;
 extern boost::mutex ban_list_details_mutex;
 extern boost::mutex ban_list_mutex;
 extern std::mutex flow_counter;
+extern boost::mutex packet_map_mutex;
 
 #ifdef REDIS
 extern unsigned int redis_port;
@@ -3133,7 +3135,6 @@ void process_packet(simple_packet_t& current_packet) {
     if (DEBUG_DUMP_ALL_PACKETS) {
         logger << log4cpp::Priority::INFO << "Dump: " << print_simple_packet(current_packet);
     }
-
     // Increment counter about total number of packets processes here
     __sync_fetch_and_add(&total_simple_packets_processed, 1);
 
@@ -3253,7 +3254,7 @@ void process_packet(simple_packet_t& current_packet) {
         }
 
         subnet_counter_t* subnet_counter = &subnet_iterator->second;
-
+        
         // Increment countres for each subnet
         if (current_packet.packet_direction == OUTGOING) {
             increment_outgoing_counters(subnet_counter, current_packet, sampled_number_of_packets, sampled_number_of_bytes);
@@ -3302,6 +3303,11 @@ void process_packet(simple_packet_t& current_packet) {
                 return;
             }
         }
+	packet_map_mutex.lock();
+        map_of_packets::iterator pack_iterator;
+        pack_iterator = PacketMap.find(current_subnet);
+        pack_iterator->second.push_back(current_packet);
+        packet_map_mutex.unlock();
 
 
         // Incerement main and per protocol packet counters
@@ -3340,6 +3346,7 @@ void process_packet(simple_packet_t& current_packet) {
             }
 
             map_element_t* current_element = &itr->second[shift_in_vector];
+            
 
             increment_incoming_counters(current_element, current_packet, sampled_number_of_packets, sampled_number_of_bytes);
 

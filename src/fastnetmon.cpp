@@ -371,7 +371,7 @@ uint64_t incoming_total_flows_speed = 0;
 uint64_t outgoing_total_flows_speed = 0;
 
 map_of_vector_counters_t SubnetVectorMap;
-
+map_of_packets PacketMap;
 // Network counters for IPv6
 abstract_subnet_counters_t<subnet_ipv6_cidr_mask_t> ipv6_subnet_counters;
 
@@ -394,6 +394,7 @@ map_of_vector_counters_for_flow_t SubnetVectorMapFlow;
 boost::mutex ban_list_details_mutex;
 boost::mutex ban_list_mutex;
 std::mutex flow_counter;
+boost::mutex packet_map_mutex;
 
 // map for flows
 std::map<uint64_t, int> FlowCounter;
@@ -1025,8 +1026,10 @@ void subnet_vectors_allocator(prefix_t* prefix, void* data) {
     map_element_t zero_map_element;
     memset(&zero_map_element, 0, sizeof(zero_map_element));
 
+    simple_packet_t zero_packet_element;
     // Initilize our counters with fill constructor
     try {
+	PacketMap[current_subnet] = vector_of_packets(network_size_in_ips, zero_packet_element);
         SubnetVectorMap[current_subnet] = vector_of_counters(network_size_in_ips, zero_map_element);
         SubnetVectorMapSpeed[current_subnet] = vector_of_counters(network_size_in_ips, zero_map_element);
         SubnetVectorMapSpeedAverage[current_subnet] = vector_of_counters(network_size_in_ips, zero_map_element);
