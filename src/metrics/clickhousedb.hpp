@@ -5,6 +5,7 @@
 
 #include "../fastnetmon_types.h"
 
+void clickhouse_push_traffic_thread();
 void clickhouse_push_thread();
 bool push_traffic_counters_to_clickhousedb(std::string clickhousedb_database);
 bool push_network_traffic_counters_to_clickhousedb(std::string clickhousedb_database);

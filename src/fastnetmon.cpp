@@ -449,7 +449,7 @@ std::string graphite_prefix = "fastnetmon";
 bool process_incoming_traffic = true;
 bool process_outgoing_traffic = true;
 
-// InfluxDB
+// Clickhouse
 std::string clickhousedb_database = "fastnetmon";
 std::string clickhousedb_user = "";
 std::string clickhousedb_password = "";
@@ -1659,7 +1659,11 @@ int main(int argc, char** argv) {
         service_thread_group.add_thread(new boost::thread(cleanup_ban_list));
     }
 
+    // Start thread push to clickhouse
     service_thread_group.add_thread(new boost::thread(clickhouse_push_thread));
+
+    //Start thread push traffic counters
+    service_thread_group.add_thread(new boost::thread(clickhouse_push_traffic_thread));
 
     // This thread will check about filled buckets with packets and process they
     auto check_traffic_buckets_thread = new boost::thread(check_traffic_buckets);

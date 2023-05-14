@@ -69,5 +69,21 @@ class simple_packet_t {
 
     // IP address of device which send this flow
     uint32_t agent_ip_address = 0;
+
+    bool operator==(const simple_packet_t& p) const {
+        if ((src_ip != p.src_ip) && (dst_ip != p.dst_ip) && (source_port != p.source_port) && (destination_port != p.destination_port))
+            return false;
+        return true;
+    }
+
+    bool operator<(const simple_packet_t& p) const {
+        if (src_ip < p.src_ip) return true;
+	if (src_ip > p.src_ip) return false;
+	return false;
+
+
+    }
+
+
 };
 

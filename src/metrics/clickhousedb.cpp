@@ -7,6 +7,7 @@
 #include "../all_logcpp_libraries.h"
 
 #include <vector>
+#include <set>
 
 extern bool print_average_traffic_counts;
 extern struct timeval graphite_thread_execution_time;
@@ -35,7 +36,24 @@ extern unsigned int clickhousedb_push_period;
 
 extern boost::mutex packet_map_mutex;
 
-// This thread pushes data to InfluxDB
+
+// This thread pushes data to ClickHouse
+void clickhouse_push_traffic_thread() {
+    // Sleep for a half second for shift against calculation thread
+    boost::this_thread::sleep(boost::posix_time::milliseconds(500));
+
+    bool do_dns_resolution = false;
+
+    logger << log4cpp::Priority::INFO << "START CLICKHOUSE THREAD";
+
+    while (true) {
+        boost::this_thread::sleep(boost::posix_time::seconds(10));
+
+        push_traffic_counters_to_clickhousedb(clickhousedb_database);
+
+    }
+}
+// This thread pushes data to ClickHouse
 void clickhouse_push_thread() {
     // Sleep for a half second for shift against calculation thread
     boost::this_thread::sleep(boost::posix_time::milliseconds(500));
@@ -50,8 +68,6 @@ void clickhouse_push_thread() {
 	//logger << log4cpp::Priority::INFO << "Clickhouse push to DB: " << clickhousedb_database << "with period: " << clickhousedb_push_period ;
 
 
-	push_traffic_counters_to_clickhousedb(clickhousedb_database);
-
         push_total_metrics_counters_to_clickhousedb(clickhousedb_database, total_speed_average_counters, false);
 
 	push_hosts_traffic_counters_to_clickhousedb(clickhousedb_database);
@@ -61,7 +77,7 @@ void clickhouse_push_thread() {
     }
 }
 
-// Push total traffic counters to InfluxDB
+// Push total traffic counters to Clickhouse
 bool push_total_metrics_counters_to_clickhousedb(std::string clickhousedb_database,
                                              total_counter_element_t total_speed_average_counters_param[4],
                                              bool ipv6) {
@@ -159,52 +175,62 @@ bool push_traffic_counters_to_clickhousedb(std::string clickhousedb_database) {
     auto packetPayloadFullLength = std::make_shared<clickhouse::ColumnInt32>();
     auto packetDirection = std::make_shared<clickhouse::ColumnInt8>();
     auto agentIpAddress = std::make_shared<clickhouse::ColumnUInt32>();    
+    //vector_of_packets pkts;
+    typedef std::set<simple_packet_t> set_of_packets;
+    set_of_packets pkts;
+    set_of_packets zero_pkts;
+    
     packet_map_mutex.lock();  
     for (map_of_packets::iterator itr = testmap->begin(); itr != testmap->end(); ++itr) {
+	uint32_t subnet_ip = ntohl(itr->first.subnet_address);
+	//logger << log4cpp::Priority::INFO << "RRRRRRR"<< subnet_ip<<"\n";
 
-
-        for (vector_of_packets::iterator vector_itr = itr->second.begin(); vector_itr != itr->second.end(); ++vector_itr) {
-
-            uint32_t subnet_ip                     = ntohl(itr->first.subnet_address);
-            simple_packet_t* packet = &*vector_itr;
-
-	    if (packet->protocol == IPPROTO_UDP or packet->protocol == IPPROTO_TCP){
-            	//logger << log4cpp::Priority::INFO << "RRRRRRR"<< subnet_ip<<"\n";
-	    	//logger << log4cpp::Priority::INFO << "TTTTTT"<< packe->dst_ip<<"\n";
-		//logger << log4cpp::Priority::INFO << "DUMP: srcint:"<< ntohl(packet->src_ip) <<" srcstr: "<< convert_ip_as_uint_to_string(packet->src_ip) << print_simple_packet(*packet) << "\n";
-		
-		packetDateTime->Append(unix_timestamp_nanoseconds/1000000000);
-		source->Append(packet->source);
-        	sampleRatio->Append(packet->sample_ratio);
-        	srcIp->Append(ntohl(packet->src_ip));
-        	dstIp->Append(ntohl(packet->dst_ip));
-        	srcIpv6->Append("");
-        	dstIpv6->Append("");
-        	srcAsn->Append(packet->src_asn);
-        	dstAsn->Append(packet->dst_asn);
-        	inputInterface->Append(packet->input_interface);
-        	outputInterface->Append(packet->output_interface);
-        	ipProtocolVersion->Append(packet->ip_protocol_version);
-        	ttl->Append(packet->ttl);
-        	sourcePort->Append(packet->source_port);
-        	destinationPort->Append(packet->destination_port);
-        	protocol->Append(packet->protocol);
-        	length->Append(packet->length);
-        	numberOfPackets->Append(packet->number_of_packets);
-        	flags->Append(packet->flags);
-        	ipFragmented->Append(packet->ip_fragmented);
-        	ipDontFragment->Append(packet->ip_dont_fragment);
-        	packetPayloadLength->Append(packet->packet_payload_length);
-        	packetPayloadFullLength->Append(packet->packet_payload_full_length);
-        	packetDirection->Append(packet->packet_direction);
-        	agentIpAddress->Append(packet->agent_ip_address);
-
-	    }
-	}
-	itr->second = zero_vector_of_packets;
-
+        //pkts.insert(pkts.end(), itr->second.begin(), itr->second.end());
+	pkts.insert(itr->second.begin(), itr->second.end());
+        itr->second = zero_vector_of_packets;
     }
     packet_map_mutex.unlock();
+
+    //pkts.erase(unique(pkts.begin(), pkts.end()), pkts.end());
+    //for (vector_of_packets::iterator vector_itr = pkts.begin(); vector_itr != pkts.end(); ++vector_itr) {
+    for (set_of_packets::iterator vector_itr = pkts.begin(); vector_itr != pkts.end(); ++vector_itr) {
+
+        const simple_packet_t* packet = &*vector_itr;
+
+	if (packet->protocol == IPPROTO_UDP or packet->protocol == IPPROTO_TCP){
+	    //logger << log4cpp::Priority::INFO << "TTTTTT"<< packe->dst_ip<<"\n";
+	    //logger << log4cpp::Priority::INFO << "DUMP: srcint:"<< ntohl(packet->src_ip) <<" srcstr: "<< convert_ip_as_uint_to_string(packet->src_ip) << print_simple_packet(*packet) << "\n";
+		
+	    packetDateTime->Append(unix_timestamp_nanoseconds/1000000000);
+	    source->Append(packet->source);
+            sampleRatio->Append(packet->sample_ratio);
+            srcIp->Append(ntohl(packet->src_ip));
+            dstIp->Append(ntohl(packet->dst_ip));
+            srcIpv6->Append("");
+            dstIpv6->Append("");
+            srcAsn->Append(packet->src_asn);
+            dstAsn->Append(packet->dst_asn);
+            inputInterface->Append(packet->input_interface);
+            outputInterface->Append(packet->output_interface);
+            ipProtocolVersion->Append(packet->ip_protocol_version);
+            ttl->Append(packet->ttl);
+            sourcePort->Append(packet->source_port);
+            destinationPort->Append(packet->destination_port);
+            protocol->Append(packet->protocol);
+            length->Append(packet->length);
+            numberOfPackets->Append(packet->number_of_packets);
+            flags->Append(packet->flags);
+            ipFragmented->Append(packet->ip_fragmented);
+            ipDontFragment->Append(packet->ip_dont_fragment);
+            packetPayloadLength->Append(packet->packet_payload_length);
+            packetPayloadFullLength->Append(packet->packet_payload_full_length);
+            packetDirection->Append(packet->packet_direction);
+            agentIpAddress->Append(packet->agent_ip_address);
+
+	}
+    }
+    //pkts = zero_vector_of_packets;
+    pkts = zero_pkts;
 
     clickhouse::Block block;
 
@@ -243,7 +269,7 @@ bool push_traffic_counters_to_clickhousedb(std::string clickhousedb_database) {
     //return true;
 }
 
-// Push per subnet traffic counters to influxDB
+// Push per subnet traffic counters to Clickhouse
 bool push_network_traffic_counters_to_clickhousedb(std::string clickhousedb_database) {
 
     auto metricDateTime = std::make_shared<clickhouse::ColumnDateTime>();
@@ -286,7 +312,7 @@ bool push_network_traffic_counters_to_clickhousedb(std::string clickhousedb_data
 
 }
 
-// Push host traffic to InfluxDB
+// Push host traffic to Clickhouse
 bool push_hosts_traffic_counters_to_clickhousedb(std::string clickhousedb_database) {
 
     map_of_vector_counters_t* current_speed_map = nullptr;
